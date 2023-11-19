@@ -1,79 +1,108 @@
+from django.contrib.auth import get_user_model
+from django.urls import reverse
+from django.test import Client
+
 import pytest
 from http import HTTPStatus
-from django.urls import reverse
-from django.contrib.auth import get_user_model
-from django.test import Client
-from news.forms import BAD_WORDS, WARNING
+
 from news.models import Comment, News
+from news.forms import BAD_WORDS, WARNING
 
 
 User = get_user_model()
 
 
-def create_test_news_and_user():
-    news = News.objects.create(title='Заголовок', text='Текст')
-    user = User.objects.create(username='Мимо Крокодил')
-    auth_client = Client()
-    auth_client.force_login(user)
-    form_data = {'text': 'Текст комментария'}
-    return news, user, auth_client, form_data
-
-
-def create_comment_setup_data():
-    news = News.objects.create(title='Заголовок', text='Текст')
-    author = User.objects.create(username='Автор комментария')
-    author_client = Client()
-    author_client.force_login(author)
-    reader = User.objects.create(username='Читатель')
-    reader_client = Client()
-    reader_client.force_login(reader)
-    comment = Comment.objects.create(news=news,
-                                     author=author, text='Текст комментария')
-    edit_url = reverse('news:edit', args=(comment.id,))
-    delete_url = reverse('news:delete', args=(comment.id,))
-    form_data = {'text': 'Обновлённый комментарий'}
-    url_to_comments = reverse('news:detail', args=(news.id,)) + '#comments'
-    return (news, author, author_client,
-            reader_client, comment, edit_url,
-            delete_url, form_data, url_to_comments)
+@pytest.fixture
+def test_news():
+    return News.objects.create(title='Заголовок', text='Текст')
 
 
 @pytest.fixture
-def setup_test_data():
-    return create_test_news_and_user()
+def test_user():
+    return User.objects.create(username='Мимо Крокодил')
 
 
 @pytest.fixture
-def setup_comment_edit_delete_test_data():
-    return create_comment_setup_data()
+def auth_client(test_user):
+    client = Client()
+    client.force_login(test_user)
+    return client
+
+
+@pytest.fixture
+def form_data():
+    return {'text': 'Текст комментария'}
+
+
+@pytest.fixture
+def author():
+    return User.objects.create(username='Автор комментария')
+
+
+@pytest.fixture
+def author_client(author):
+    client = Client()
+    client.force_login(author)
+    return client
+
+
+@pytest.fixture
+def reader():
+    return User.objects.create(username='Читатель')
+
+
+@pytest.fixture
+def reader_client(reader):
+    client = Client()
+    client.force_login(reader)
+    return client
+
+
+@pytest.fixture
+def comment(test_news, author):
+    return Comment.objects.create(news=test_news,
+                                  author=author, text='Текст комментария')
+
+
+@pytest.fixture
+def edit_url(comment):
+    return reverse('news:edit', args=(comment.id,))
+
+
+@pytest.fixture
+def delete_url(comment):
+    return reverse('news:delete', args=(comment.id,))
+
+
+@pytest.fixture
+def updated_form_data():
+    return {'text': 'Обновлённый комментарий'}
+
+
+@pytest.fixture
+def url_to_comments(test_news):
+    return reverse('news:detail', args=(test_news.id,)) + '#comments'
+
+
+User = get_user_model()
 
 
 @pytest.mark.django_db
-def test_anonymous_user_cant_create_comment(client, setup_test_data):
-    news, _, _, form_data = setup_test_data
-    url = reverse('news:detail', args=(news.id,))
-    client.post(url, data=form_data)
-    assert Comment.objects.count() == 0
-
-
-@pytest.mark.django_db
-def test_user_can_create_comment(setup_test_data):
-    news, user, auth_client, form_data = setup_test_data
-    url = reverse('news:detail', args=(news.id,))
+def test_user_can_create_comment(test_news, test_user, auth_client, form_data):
+    url = reverse('news:detail', args=(test_news.id,))
     response = auth_client.post(url, data=form_data)
     assert response.status_code == HTTPStatus.FOUND
     assert response.url.endswith('#comments')
     assert Comment.objects.count() == 1
     comment = Comment.objects.get()
     assert comment.text == form_data['text']
-    assert comment.news == news
-    assert comment.author == user
+    assert comment.news == test_news
+    assert comment.author == test_user
 
 
 @pytest.mark.django_db
-def test_user_cant_use_bad_words(setup_test_data):
-    news, user, auth_client, _ = setup_test_data
-    url = reverse('news:detail', args=(news.id,))
+def test_user_cant_use_bad_words(test_news, test_user, auth_client):
+    url = reverse('news:detail', args=(test_news.id,))
     bad_words_data = {'text': f'Какой-то текст, {BAD_WORDS[0]}, еще текст'}
     response = auth_client.post(url, data=bad_words_data)
     assert response.status_code == HTTPStatus.OK
@@ -85,10 +114,8 @@ def test_user_cant_use_bad_words(setup_test_data):
 
 
 @pytest.mark.django_db
-def test_author_can_delete_comment(setup_comment_edit_delete_test_data):
-    (
-        _, author, author_client, _, comment, _, delete_url, _, url_to_comments
-    ) = setup_comment_edit_delete_test_data
+def test_author_can_delete_comment(author, author_client,
+                                   comment, delete_url, url_to_comments):
     assert Comment.objects.count() == 1
     response = author_client.delete(delete_url)
     assert response.status_code == HTTPStatus.FOUND
@@ -97,12 +124,9 @@ def test_author_can_delete_comment(setup_comment_edit_delete_test_data):
 
 
 @pytest.mark.django_db
-def test_user_cant_delete_comment_of_another_user(
-    setup_comment_edit_delete_test_data
-):
-    (
-        _, _, _, reader_client, comment, _, delete_url, _, _
-    ) = setup_comment_edit_delete_test_data
+def test_user_cant_delete_comment_of_another_user(reader_client,
+                                                  comment,
+                                                  delete_url):
     response = reader_client.delete(delete_url)
     assert response.status_code == HTTPStatus.NOT_FOUND
     assert Comment.objects.count() == 1

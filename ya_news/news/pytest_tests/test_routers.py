@@ -1,7 +1,9 @@
-from http import HTTPStatus
 from django.urls import reverse
-import pytest
 from django.contrib.auth import get_user_model
+
+from http import HTTPStatus
+import pytest
+
 from news.models import Comment, News
 
 
